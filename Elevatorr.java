@@ -13,6 +13,8 @@ public class Elevatorr implements Runnable {
     private final TreeSet<Integer> destinationRequests = new TreeSet<>();
     private final List<Integer> globalPickupRequests;
 
+    private static final int THRESHOLD_DISTANCE = 10;
+
     public Elevatorr(String name, int maxFloor, List<Integer> globalPickupRequests) {
         this.name = name;
         this.maxFloor = maxFloor;
@@ -105,12 +107,10 @@ public class Elevatorr implements Runnable {
         while (true) {
             try {
                 synchronized (this) {
-                    // 🚧 Wait here if in maintenance mode
                     while (inMaintenance) {
                         wait(); // Suspended while in maintenance
                     }
 
-                    // Take from global queue if idle
                     if (!hasRequests()) {
                         claimNearbyPickup();
                     }
@@ -119,14 +119,17 @@ public class Elevatorr implements Runnable {
                         wait(); // nothing to do
                     }
 
-                    // Handle floor stop if needed
                     if (shouldStopAtCurrentFloor()) {
                         processStop();
 
-                        // If it's a pickup, allow user to enter destination
                         if (waitingForDestination) {
-                            wait(10000); // wait for destination input
-                            waitingForDestination = false;
+                            try {
+                                wait(10000); // wait for destination input
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            } finally {
+                                waitingForDestination = false;
+                            }
                         }
                     }
 
@@ -135,7 +138,7 @@ public class Elevatorr implements Runnable {
                         goingUp = nextFloor > currentFloor;
 
                         while (currentFloor != nextFloor) {
-                            if (inMaintenance) break; // if maintenance is triggered mid-move
+                            if (inMaintenance) break;
 
                             currentFloor += goingUp ? 1 : -1;
                             System.out.println("Elevator " + name + " moving... Floor: " + currentFloor);
@@ -143,9 +146,14 @@ public class Elevatorr implements Runnable {
                             if (shouldStopAtCurrentFloor()) {
                                 processStop();
                                 if (waitingForDestination) {
-                                    wait(10000); // wait at that floor
-                                    waitingForDestination = false;
-                                    break; // exit loop to re-check queue
+                                    try {
+                                        wait(10000);
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                    } finally {
+                                        waitingForDestination = false;
+                                    }
+                                    break;
                                 }
                             }
 
@@ -164,14 +172,26 @@ public class Elevatorr implements Runnable {
         allRequests.addAll(pickupRequests);
         allRequests.addAll(destinationRequests);
 
+        // Priority requests within threshold
+        TreeSet<Integer> priorityRequests = new TreeSet<>();
+        for (Integer floor : allRequests) {
+            if (Math.abs(floor - currentFloor) <= THRESHOLD_DISTANCE) {
+                priorityRequests.add(floor);
+            }
+        }
+
+        TreeSet<Integer> targetSet = priorityRequests.isEmpty() ? allRequests : priorityRequests;
+
         if (goingUp) {
-            Integer higher = allRequests.ceiling(currentFloor + 1);
+            Integer higher = targetSet.ceiling(currentFloor + 1);
             if (higher != null) return higher;
-            return allRequests.floor(currentFloor - 1);
+            return targetSet.floor(currentFloor - 1);
         } else {
-            Integer lower = allRequests.floor(currentFloor - 1);
+            Integer lower = targetSet.floor(currentFloor - 1);
             if (lower != null) return lower;
-            return allRequests.ceiling(currentFloor + 1);
+            return targetSet.ceiling(currentFloor + 1);
         }
     }
 }
+
+
